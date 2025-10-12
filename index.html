@@ -336,27 +336,95 @@
                             plugins: {
                                 legend: {
                                     display: true,
-                                    position: 'top'
+                                    position: 'top',
+                                    labels: {
+                                        font: {
+                                            size: 14
+                                        },
+                                        padding: 15
+                                    }
                                 },
                                 tooltip: {
                                     mode: 'index',
-                                    intersect: false
+                                    intersect: false,
+                                    backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                                    padding: 12,
+                                    titleFont: {
+                                        size: 14
+                                    },
+                                    bodyFont: {
+                                        size: 13
+                                    },
+                                    callbacks: {
+                                        title: function(context) {
+                                            return 'Month ' + context[0].label;
+                                        },
+                                        label: function(context) {
+                                            let label = context.dataset.label || '';
+                                            if (label) {
+                                                label += ': ';
+                                            }
+                                            if (context.parsed.y !== null) {
+                                                label += Math.round(context.parsed.y).toLocaleString() + ' km';
+                                            }
+                                            return label;
+                                        },
+                                        afterBody: function(context) {
+                                            const actualValue = context[0].parsed.y;
+                                            const allowedValue = context[1].parsed.y;
+                                            if (actualValue && allowedValue) {
+                                                const diff = actualValue - allowedValue;
+                                                if (diff > 0) {
+                                                    return `⚠️ ${Math.round(diff)} km over limit`;
+                                                } else {
+                                                    return `✓ ${Math.round(Math.abs(diff))} km under limit`;
+                                                }
+                                            }
+                                            return '';
+                                        }
+                                    }
                                 }
                             },
                             scales: {
                                 x: {
                                     title: {
                                         display: true,
-                                        text: 'Months'
+                                        text: 'Months Since Lease Start',
+                                        font: {
+                                            size: 14,
+                                            weight: 'bold'
+                                        }
+                                    },
+                                    grid: {
+                                        display: true,
+                                        color: 'rgba(0, 0, 0, 0.05)'
                                     }
                                 },
                                 y: {
                                     title: {
                                         display: true,
-                                        text: 'Kilometers'
+                                        text: 'Total Kilometers Driven',
+                                        font: {
+                                            size: 14,
+                                            weight: 'bold'
+                                        }
                                     },
-                                    beginAtZero: true
+                                    beginAtZero: true,
+                                    grid: {
+                                        display: true,
+                                        color: 'rgba(0, 0, 0, 0.1)'
+                                    },
+                                    ticks: {
+                                        callback: function(value) {
+                                            return value.toLocaleString() + ' km';
+                                        }
+                                    }
                                 }
+                            },
+                            interaction: {
+                                mode: 'nearest',
+                                axis: 'x',
+                                intersect: false
                             }
                         }
                     });
@@ -369,27 +437,87 @@
                 };
             }, [mileageEntries, leaseParams]);
 
-            const addEntry = async () => {
+            const addEntry = () => {
                 if (newEntry.mileage && newEntry.date) {
                     const entry = {
                         id: Date.now(),
                         date: newEntry.date,
                         mileage: parseFloat(newEntry.mileage)
                     };
-                    setMileageEntries([...mileageEntries, entry]);
+                    const updatedEntries = [...mileageEntries, entry];
+                    setMileageEntries(updatedEntries);
                     setNewEntry({ date: new Date().toISOString().split('T')[0], mileage: '' });
                     
+                    // Force save to GitHub immediately
                     if (githubToken) {
-                        setTimeout(() => saveToGitHub(), 500);
+                        setTimeout(() => {
+                            const data = {
+                                leaseParams,
+                                mileageEntries: updatedEntries,
+                                lastUpdated: new Date().toISOString()
+                            };
+                            saveDataToGitHub(data);
+                        }, 100);
                     }
                 }
             };
 
-            const deleteEntry = async (id) => {
-                setMileageEntries(mileageEntries.filter(e => e.id !== id));
+            const deleteEntry = (id) => {
+                const updatedEntries = mileageEntries.filter(e => e.id !== id);
+                setMileageEntries(updatedEntries);
                 
+                // Force save to GitHub immediately
                 if (githubToken) {
-                    setTimeout(() => saveToGitHub(), 500);
+                    setTimeout(() => {
+                        const data = {
+                            leaseParams,
+                            mileageEntries: updatedEntries,
+                            lastUpdated: new Date().toISOString()
+                        };
+                        saveDataToGitHub(data);
+                    }, 100);
+                }
+            };
+
+            const saveDataToGitHub = async (dataToSave) => {
+                try {
+                    let sha = null;
+                    try {
+                        const getResponse = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/contents/${DATA_FILE}`, {
+                            headers: {
+                                'Authorization': `token ${githubToken}`,
+                                'Accept': 'application/vnd.github.v3+json'
+                            }
+                        });
+                        if (getResponse.ok) {
+                            const fileData = await getResponse.json();
+                            sha = fileData.sha;
+                        }
+                    } catch(e) {
+                        console.log('File does not exist yet');
+                    }
+
+                    const content = btoa(unescape(encodeURIComponent(JSON.stringify(dataToSave, null, 2))));
+                    const payload = {
+                        message: 'Auto-save lease tracker data',
+                        content: content
+                    };
+                    
+                    if (sha) {
+                        payload.sha = sha;
+                    }
+
+                    await fetch(`https://api.github.com/repos/${GITHUB_REPO}/contents/${DATA_FILE}`, {
+                        method: 'PUT',
+                        headers: {
+                            'Authorization': `token ${githubToken}`,
+                            'Content-Type': 'application/json',
+                            'Accept': 'application/vnd.github.v3+json'
+                        },
+                        body: JSON.stringify(payload)
+                    });
+                } catch (error) {
+                    console.error('Auto-save error:', error);
                 }
             };
 
