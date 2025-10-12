@@ -256,69 +256,126 @@
             const stats = calculateStats();
 
             const getChartData = () => {
-                if (mileageEntries.length === 0) return { labels: [], datasets: [] };
-                
-                const sortedEntries = [...mileageEntries].sort((a, b) => new Date(a.date) - new Date(b.date));
                 const startDate = new Date(leaseParams.leaseStartDate);
+                const today = new Date();
+                const totalMonths = leaseParams.leaseDurationMonths;
                 
+                // Create labels for all months (0 to 36)
                 const labels = [];
-                const actualData = [];
+                for (let i = 0; i <= totalMonths; i++) {
+                    labels.push(i.toString());
+                }
+                
+                // Initialize data arrays
+                const actualData = new Array(totalMonths + 1).fill(null);
                 const allowedData = [];
                 const projectedData = [];
-
-                sortedEntries.forEach(entry => {
-                    const entryDate = new Date(entry.date);
-                    const daysFromStart = Math.floor((entryDate - startDate) / (1000 * 60 * 60 * 24));
-                    const monthsFromStart = daysFromStart / 30.44;
-                    const allowedAtThisPoint = (leaseParams.totalAllowedKm / leaseParams.leaseDurationMonths) * monthsFromStart;
-                    const drivenKm = entry.mileage - leaseParams.startingMileage;
+                
+                // Calculate allowed km per month
+                const kmPerMonth = leaseParams.totalAllowedKm / totalMonths;
+                
+                // Fill allowed data (linear progression)
+                for (let i = 0; i <= totalMonths; i++) {
+                    allowedData.push(kmPerMonth * i);
+                }
+                
+                // Process actual entries
+                if (mileageEntries.length > 0) {
+                    const sortedEntries = [...mileageEntries].sort((a, b) => new Date(a.date) - new Date(b.date));
                     
-                    labels.push(monthsFromStart.toFixed(1));
-                    actualData.push(drivenKm);
-                    allowedData.push(allowedAtThisPoint);
-                    projectedData.push(stats.dailyAverage * daysFromStart);
-                });
-
-                labels.push(leaseParams.leaseDurationMonths.toString());
-                actualData.push(null);
-                allowedData.push(leaseParams.totalAllowedKm);
-                projectedData.push(stats.projectedTotal);
+                    sortedEntries.forEach(entry => {
+                        const entryDate = new Date(entry.date);
+                        const daysFromStart = Math.floor((entryDate - startDate) / (1000 * 60 * 60 * 24));
+                        const monthsFromStart = daysFromStart / 30.44;
+                        const drivenKm = entry.mileage - leaseParams.startingMileage;
+                        
+                        // Place actual data at the closest month
+                        const monthIndex = Math.round(monthsFromStart);
+                        if (monthIndex >= 0 && monthIndex <= totalMonths) {
+                            actualData[monthIndex] = drivenKm;
+                        }
+                    });
+                    
+                    // Fill gaps in actual data with interpolation
+                    let lastValidIndex = -1;
+                    for (let i = 0; i <= totalMonths; i++) {
+                        if (actualData[i] !== null) {
+                            // Interpolate between last valid and current
+                            if (lastValidIndex >= 0) {
+                                const gap = i - lastValidIndex;
+                                const diff = actualData[i] - actualData[lastValidIndex];
+                                for (let j = 1; j < gap; j++) {
+                                    actualData[lastValidIndex + j] = actualData[lastValidIndex] + (diff / gap) * j;
+                                }
+                            }
+                            lastValidIndex = i;
+                        }
+                    }
+                    
+                    // Calculate projection based on current pace
+                    if (stats.dailyAverage > 0) {
+                        const daysElapsed = Math.max(1, Math.floor((today - startDate) / (1000 * 60 * 60 * 24)));
+                        const currentMonthsElapsed = daysElapsed / 30.44;
+                        
+                        for (let i = 0; i <= totalMonths; i++) {
+                            if (i <= currentMonthsElapsed) {
+                                // Use actual data for past months if available
+                                projectedData.push(actualData[i] !== null ? actualData[i] : stats.dailyAverage * (i * 30.44));
+                            } else {
+                                // Project future months based on current pace
+                                projectedData.push(stats.dailyAverage * (i * 30.44));
+                            }
+                        }
+                    } else {
+                        projectedData.push(...new Array(totalMonths + 1).fill(null));
+                    }
+                } else {
+                    projectedData.push(...new Array(totalMonths + 1).fill(null));
+                }
 
                 return {
                     labels,
                     datasets: [
                         {
-                            label: 'Actual',
+                            label: 'Your Actual Usage',
                             data: actualData,
                             borderColor: '#4f46e5',
-                            backgroundColor: '#4f46e5',
-                            borderWidth: 2,
-                            tension: 0.1
+                            backgroundColor: 'rgba(79, 70, 229, 0.1)',
+                            borderWidth: 3,
+                            tension: 0.4,
+                            pointRadius: 4,
+                            pointHoverRadius: 6,
+                            fill: true
                         },
                         {
-                            label: 'Allowed',
+                            label: 'Allowed Limit',
                             data: allowedData,
                             borderColor: '#10b981',
-                            backgroundColor: '#10b981',
+                            backgroundColor: 'transparent',
                             borderWidth: 2,
-                            borderDash: [5, 5],
-                            tension: 0.1
+                            borderDash: [10, 5],
+                            tension: 0,
+                            pointRadius: 0,
+                            pointHoverRadius: 4
                         },
                         {
-                            label: 'Projected',
+                            label: 'Projected at Current Pace',
                             data: projectedData,
                             borderColor: '#ef4444',
-                            backgroundColor: '#ef4444',
+                            backgroundColor: 'rgba(239, 68, 68, 0.05)',
                             borderWidth: 2,
-                            borderDash: [3, 3],
-                            tension: 0.1
+                            borderDash: [5, 5],
+                            tension: 0.4,
+                            pointRadius: 0,
+                            pointHoverRadius: 4,
+                            fill: false
                         }
                     ]
                 };
             };
 
             useEffect(() => {
-                if (mileageEntries.length > 0 && chartRef.current) {
+                if (chartRef.current) {
                     const ctx = chartRef.current.getContext('2d');
                     
                     if (chartInstance.current) {
@@ -339,9 +396,11 @@
                                     position: 'top',
                                     labels: {
                                         font: {
-                                            size: 14
+                                            size: 14,
+                                            weight: 'bold'
                                         },
-                                        padding: 15
+                                        padding: 15,
+                                        usePointStyle: true
                                     }
                                 },
                                 tooltip: {
@@ -350,14 +409,15 @@
                                     backgroundColor: 'rgba(0, 0, 0, 0.8)',
                                     padding: 12,
                                     titleFont: {
-                                        size: 14
+                                        size: 14,
+                                        weight: 'bold'
                                     },
                                     bodyFont: {
                                         size: 13
                                     },
                                     callbacks: {
                                         title: function(context) {
-                                            return 'Month ' + context[0].label;
+                                            return 'Month ' + context[0].label + ' of ' + leaseParams.leaseDurationMonths;
                                         },
                                         label: function(context) {
                                             let label = context.dataset.label || '';
@@ -370,14 +430,35 @@
                                             return label;
                                         },
                                         afterBody: function(context) {
-                                            const actualValue = context[0].parsed.y;
-                                            const allowedValue = context[1].parsed.y;
+                                            const datasets = context[0].chart.data.datasets;
+                                            const index = context[0].dataIndex;
+                                            
+                                            let actualValue = null;
+                                            let allowedValue = null;
+                                            
+                                            for (let i = 0; i < datasets.length; i++) {
+                                                if (datasets[i].label.includes('Actual')) {
+                                                    actualValue = datasets[i].data[index];
+                                                } else if (datasets[i].label.includes('Allowed')) {
+                                                    allowedValue = datasets[i].data[index];
+                                                }
+                                            }
+                                            
                                             if (actualValue && allowedValue) {
                                                 const diff = actualValue - allowedValue;
+                                                const percentage = ((diff / allowedValue) * 100).toFixed(1);
                                                 if (diff > 0) {
-                                                    return `⚠️ ${Math.round(diff)} km over limit`;
+                                                    return [
+                                                        '',
+                                                        `⚠️ ${Math.round(diff)} km over limit`,
+                                                        `(${percentage}% above allowed)`
+                                                    ];
                                                 } else {
-                                                    return `✓ ${Math.round(Math.abs(diff))} km under limit`;
+                                                    return [
+                                                        '',
+                                                        `✓ ${Math.round(Math.abs(diff))} km under limit`,
+                                                        `(${Math.abs(percentage)}% below allowed)`
+                                                    ];
                                                 }
                                             }
                                             return '';
@@ -389,15 +470,22 @@
                                 x: {
                                     title: {
                                         display: true,
-                                        text: 'Months Since Lease Start',
+                                        text: 'Month of Lease (0 = Start, ' + leaseParams.leaseDurationMonths + ' = End)',
                                         font: {
-                                            size: 14,
+                                            size: 13,
                                             weight: 'bold'
-                                        }
+                                        },
+                                        padding: 10
                                     },
                                     grid: {
                                         display: true,
                                         color: 'rgba(0, 0, 0, 0.05)'
+                                    },
+                                    ticks: {
+                                        maxTicksLimit: 20,
+                                        callback: function(value) {
+                                            return 'M' + value;
+                                        }
                                     }
                                 },
                                 y: {
@@ -405,9 +493,10 @@
                                         display: true,
                                         text: 'Total Kilometers Driven',
                                         font: {
-                                            size: 14,
+                                            size: 13,
                                             weight: 'bold'
-                                        }
+                                        },
+                                        padding: 10
                                     },
                                     beginAtZero: true,
                                     grid: {
@@ -416,7 +505,7 @@
                                     },
                                     ticks: {
                                         callback: function(value) {
-                                            return value.toLocaleString() + ' km';
+                                            return (value / 1000).toFixed(1) + 'k km';
                                         }
                                     }
                                 }
@@ -678,12 +767,32 @@
                                 </div>
                             </div>
 
-                            {mileageEntries.length > 0 && (
+                            {mileageEntries.length > 0 ? (
                                 <div className="bg-gray-50 rounded-xl p-6 mb-6">
-                                    <h3 className="text-lg font-semibold mb-4 text-gray-800">Mileage Projection</h3>
-                                    <div style={{ height: '300px' }}>
+                                    <h3 className="text-lg font-semibold mb-4 text-gray-800">Month-by-Month Usage Analysis</h3>
+                                    <div className="bg-white rounded-lg p-3 mb-4">
+                                        <div className="grid grid-cols-3 gap-2 text-sm">
+                                            <div className="flex items-center gap-2">
+                                                <div className="w-4 h-4 bg-indigo-600 rounded"></div>
+                                                <span className="font-medium">Your actual usage from entries</span>
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                <div className="w-4 h-1 bg-green-600 border-dashed border-2 border-green-600"></div>
+                                                <span className="font-medium">Allowed limit line</span>
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                <div className="w-4 h-1 bg-red-600 border-dashed border-2 border-red-600"></div>
+                                                <span className="font-medium">Projected at current pace</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div style={{ height: '400px' }}>
                                         <canvas ref={chartRef}></canvas>
                                     </div>
+                                </div>
+                            ) : (
+                                <div className="bg-gray-50 rounded-xl p-6 mb-6 text-center">
+                                    <p className="text-gray-600">Add mileage entries to see your usage chart</p>
                                 </div>
                             )}
 
