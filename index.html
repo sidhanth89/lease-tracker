@@ -7,525 +7,591 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <script src="https://unpkg.com/recharts@2.10.3/dist/Recharts.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone@7.23.5/babel.min.js"></script>
 </head>
 <body>
     <div id="root"></div>
     
     <script type="text/babel">
-        // Wait for all libraries to load
-        window.addEventListener('load', function() {
-            const { useState, useEffect } = React;
-            const Recharts = window.Recharts;
-            
-            if (!Recharts) {
-                console.error('Recharts failed to load');
-                document.getElementById('root').innerHTML = '<div style="padding: 20px; text-align: center;"><h1>Loading libraries...</h1><p>Please refresh if this persists.</p></div>';
-                return;
-            }
-            
-            const { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } = Recharts;
+        const { useState, useEffect, useRef } = React;
 
-            function LeaseMileageTracker() {
-                const getInitialScriptUrl = () => {
-                    try {
-                        const saved = localStorage.getItem('scriptUrl');
-                        return saved || '';
-                    } catch(e) {
-                        return '';
+        function LeaseMileageTracker() {
+            const chartRef = useRef(null);
+            const chartInstance = useRef(null);
+
+            const getInitialScriptUrl = () => {
+                try {
+                    const saved = localStorage.getItem('scriptUrl');
+                    return saved || '';
+                } catch(e) {
+                    return '';
+                }
+            };
+
+            const loadSavedData = () => {
+                try {
+                    const saved = localStorage.getItem('leaseTrackerData');
+                    if (saved) {
+                        return JSON.parse(saved);
+                    }
+                } catch(e) {
+                    console.error('Error loading saved data:', e);
+                }
+                return {
+                    leaseParams: {
+                        totalAllowedKm: 45000,
+                        costPerExtraKm: 0.15,
+                        leaseDurationMonths: 36,
+                        leaseStartDate: new Date().toISOString().split('T')[0],
+                        startingMileage: 0
+                    },
+                    mileageEntries: []
+                };
+            };
+
+            const savedData = loadSavedData();
+            
+            const [leaseParams, setLeaseParams] = useState(savedData.leaseParams);
+            const [mileageEntries, setMileageEntries] = useState(savedData.mileageEntries);
+            const [newEntry, setNewEntry] = useState({
+                date: new Date().toISOString().split('T')[0],
+                mileage: ''
+            });
+            
+            const [showSettings, setShowSettings] = useState(false);
+            const [showApiSettings, setShowApiSettings] = useState(false);
+            const [scriptUrl, setScriptUrl] = useState(getInitialScriptUrl());
+            const [syncStatus, setSyncStatus] = useState('');
+            const [isLoading, setIsLoading] = useState(false);
+
+            useEffect(() => {
+                try {
+                    localStorage.setItem('leaseTrackerData', JSON.stringify({
+                        leaseParams,
+                        mileageEntries
+                    }));
+                } catch(e) {
+                    console.error('Error saving data:', e);
+                }
+            }, [leaseParams, mileageEntries]);
+
+            useEffect(() => {
+                try {
+                    if (scriptUrl) {
+                        localStorage.setItem('scriptUrl', scriptUrl);
+                    }
+                } catch(e) {
+                    console.error('Error saving script URL:', e);
+                }
+            }, [scriptUrl]);
+
+            useEffect(() => {
+                const autoLoad = async () => {
+                    if (scriptUrl && !isLoading && mileageEntries.length === 0) {
+                        await loadFromGoogleSheets();
                     }
                 };
+                autoLoad();
+            }, [scriptUrl]);
 
-                const loadSavedData = () => {
-                    try {
-                        const saved = localStorage.getItem('leaseTrackerData');
-                        if (saved) {
-                            return JSON.parse(saved);
-                        }
-                    } catch(e) {
-                        console.error('Error loading saved data:', e);
+            const saveToGoogleSheets = async () => {
+                if (!scriptUrl) {
+                    setSyncStatus('Please configure the Google Apps Script URL first');
+                    return;
+                }
+
+                setIsLoading(true);
+                setSyncStatus('Saving to Google Sheets...');
+
+                try {
+                    const paramsData = [
+                        ['Parameter', 'Value'],
+                        ['Starting Mileage', leaseParams.startingMileage],
+                        ['Total Allowed KM', leaseParams.totalAllowedKm],
+                        ['Cost Per Extra KM', leaseParams.costPerExtraKm],
+                        ['Lease Duration (Months)', leaseParams.leaseDurationMonths],
+                        ['Lease Start Date', leaseParams.leaseStartDate]
+                    ];
+
+                    const entriesData = [
+                        ['Date', 'Mileage', 'ID'],
+                        ...mileageEntries.map(e => [e.date, e.mileage, e.id])
+                    ];
+
+                    const response = await fetch(scriptUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            action: 'save',
+                            params: paramsData,
+                            entries: entriesData
+                        })
+                    });
+
+                    const data = await response.json();
+                    
+                    if (data.success) {
+                        setSyncStatus('✓ Saved to Google Sheets successfully!');
+                    } else {
+                        throw new Error('Save failed');
                     }
-                    return {
-                        leaseParams: {
-                            totalAllowedKm: 45000,
-                            costPerExtraKm: 0.15,
-                            leaseDurationMonths: 36,
-                            leaseStartDate: new Date().toISOString().split('T')[0],
-                            startingMileage: 0
-                        },
-                        mileageEntries: []
-                    };
-                };
+                    setTimeout(() => setSyncStatus(''), 3000);
+                } catch (error) {
+                    setSyncStatus('✗ Error saving: ' + error.message);
+                } finally {
+                    setIsLoading(false);
+                }
+            };
 
-                const savedData = loadSavedData();
-                
-                const [leaseParams, setLeaseParams] = useState(savedData.leaseParams);
-                const [mileageEntries, setMileageEntries] = useState(savedData.mileageEntries);
-                const [newEntry, setNewEntry] = useState({
-                    date: new Date().toISOString().split('T')[0],
-                    mileage: ''
-                });
-                
-                const [showSettings, setShowSettings] = useState(false);
-                const [showApiSettings, setShowApiSettings] = useState(false);
-                const [scriptUrl, setScriptUrl] = useState(getInitialScriptUrl());
-                const [syncStatus, setSyncStatus] = useState('');
-                const [isLoading, setIsLoading] = useState(false);
+            const loadFromGoogleSheets = async () => {
+                if (!scriptUrl) {
+                    return;
+                }
 
-                useEffect(() => {
-                    try {
-                        localStorage.setItem('leaseTrackerData', JSON.stringify({
-                            leaseParams,
-                            mileageEntries
+                setIsLoading(true);
+                setSyncStatus('Loading from Google Sheets...');
+
+                try {
+                    const response = await fetch(scriptUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ action: 'load' })
+                    });
+
+                    const data = await response.json();
+
+                    if (data.error) {
+                        throw new Error(data.error);
+                    }
+
+                    if (data.params && data.params.length > 1) {
+                        const newParams = {
+                            startingMileage: parseFloat(data.params[1][1]) || 0,
+                            totalAllowedKm: parseFloat(data.params[2][1]) || 45000,
+                            costPerExtraKm: parseFloat(data.params[3][1]) || 0.15,
+                            leaseDurationMonths: parseInt(data.params[4][1]) || 36,
+                            leaseStartDate: data.params[5][1] || new Date().toISOString().split('T')[0]
+                        };
+                        setLeaseParams(newParams);
+                    }
+
+                    if (data.entries && data.entries.length > 1) {
+                        const newEntries = data.entries.slice(1).map(row => ({
+                            date: row[0],
+                            mileage: parseFloat(row[1]),
+                            id: parseInt(row[2])
                         }));
-                    } catch(e) {
-                        console.error('Error saving data:', e);
-                    }
-                }, [leaseParams, mileageEntries]);
-
-                useEffect(() => {
-                    try {
-                        if (scriptUrl) {
-                            localStorage.setItem('scriptUrl', scriptUrl);
-                        }
-                    } catch(e) {
-                        console.error('Error saving script URL:', e);
-                    }
-                }, [scriptUrl]);
-
-                useEffect(() => {
-                    const autoLoad = async () => {
-                        if (scriptUrl && !isLoading && mileageEntries.length === 0) {
-                            await loadFromGoogleSheets();
-                        }
-                    };
-                    autoLoad();
-                }, [scriptUrl]);
-
-                const saveToGoogleSheets = async () => {
-                    if (!scriptUrl) {
-                        setSyncStatus('Please configure the Google Apps Script URL first');
-                        return;
+                        setMileageEntries(newEntries);
                     }
 
-                    setIsLoading(true);
-                    setSyncStatus('Saving to Google Sheets...');
+                    setSyncStatus('✓ Loaded from Google Sheets successfully!');
+                    setTimeout(() => setSyncStatus(''), 3000);
+                } catch (error) {
+                    setSyncStatus('');
+                } finally {
+                    setIsLoading(false);
+                }
+            };
 
-                    try {
-                        const paramsData = [
-                            ['Parameter', 'Value'],
-                            ['Starting Mileage', leaseParams.startingMileage],
-                            ['Total Allowed KM', leaseParams.totalAllowedKm],
-                            ['Cost Per Extra KM', leaseParams.costPerExtraKm],
-                            ['Lease Duration (Months)', leaseParams.leaseDurationMonths],
-                            ['Lease Start Date', leaseParams.leaseStartDate]
-                        ];
-
-                        const entriesData = [
-                            ['Date', 'Mileage', 'ID'],
-                            ...mileageEntries.map(e => [e.date, e.mileage, e.id])
-                        ];
-
-                        const response = await fetch(scriptUrl, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                action: 'save',
-                                params: paramsData,
-                                entries: entriesData
-                            })
-                        });
-
-                        const data = await response.json();
-                        
-                        if (data.success) {
-                            setSyncStatus('✓ Saved to Google Sheets successfully!');
-                        } else {
-                            throw new Error('Save failed');
-                        }
-                        setTimeout(() => setSyncStatus(''), 3000);
-                    } catch (error) {
-                        setSyncStatus('✗ Error saving: ' + error.message);
-                    } finally {
-                        setIsLoading(false);
-                    }
-                };
-
-                const loadFromGoogleSheets = async () => {
-                    if (!scriptUrl) {
-                        return;
-                    }
-
-                    setIsLoading(true);
-                    setSyncStatus('Loading from Google Sheets...');
-
-                    try {
-                        const response = await fetch(scriptUrl, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ action: 'load' })
-                        });
-
-                        const data = await response.json();
-
-                        if (data.error) {
-                            throw new Error(data.error);
-                        }
-
-                        if (data.params && data.params.length > 1) {
-                            const newParams = {
-                                startingMileage: parseFloat(data.params[1][1]) || 0,
-                                totalAllowedKm: parseFloat(data.params[2][1]) || 45000,
-                                costPerExtraKm: parseFloat(data.params[3][1]) || 0.15,
-                                leaseDurationMonths: parseInt(data.params[4][1]) || 36,
-                                leaseStartDate: data.params[5][1] || new Date().toISOString().split('T')[0]
-                            };
-                            setLeaseParams(newParams);
-                        }
-
-                        if (data.entries && data.entries.length > 1) {
-                            const newEntries = data.entries.slice(1).map(row => ({
-                                date: row[0],
-                                mileage: parseFloat(row[1]),
-                                id: parseInt(row[2])
-                            }));
-                            setMileageEntries(newEntries);
-                        }
-
-                        setSyncStatus('✓ Loaded from Google Sheets successfully!');
-                        setTimeout(() => setSyncStatus(''), 3000);
-                    } catch (error) {
-                        setSyncStatus('');
-                    } finally {
-                        setIsLoading(false);
-                    }
-                };
-
-                const calculateStats = () => {
-                    if (mileageEntries.length === 0) {
-                        return {
-                            currentKm: 0,
-                            dailyAverage: 0,
-                            projectedTotal: 0,
-                            projectedOverage: 0,
-                            projectedCost: 0,
-                            allowedDailyAverage: 0,
-                            status: 'on-track'
-                        };
-                    }
-
-                    const sortedEntries = [...mileageEntries].sort((a, b) => new Date(a.date) - new Date(b.date));
-                    const currentKm = sortedEntries[sortedEntries.length - 1].mileage - leaseParams.startingMileage;
-                    const startDate = new Date(leaseParams.leaseStartDate);
-                    const today = new Date();
-                    const daysElapsed = Math.max(1, Math.floor((today - startDate) / (1000 * 60 * 60 * 24)));
-                    const dailyAverage = currentKm / daysElapsed;
-                    const totalDays = leaseParams.leaseDurationMonths * 30.44;
-                    const projectedTotal = dailyAverage * totalDays;
-                    const projectedOverage = Math.max(0, projectedTotal - leaseParams.totalAllowedKm);
-                    const projectedCost = projectedOverage * leaseParams.costPerExtraKm;
-                    const allowedDailyAverage = leaseParams.totalAllowedKm / totalDays;
-                    
-                    let status = 'on-track';
-                    if (dailyAverage > allowedDailyAverage * 1.1) status = 'over';
-                    else if (dailyAverage > allowedDailyAverage * 1.05) status = 'warning';
-
+            const calculateStats = () => {
+                if (mileageEntries.length === 0) {
                     return {
-                        currentKm,
-                        dailyAverage,
-                        projectedTotal,
-                        projectedOverage,
-                        projectedCost,
-                        allowedDailyAverage,
-                        status
+                        currentKm: 0,
+                        dailyAverage: 0,
+                        projectedTotal: 0,
+                        projectedOverage: 0,
+                        projectedCost: 0,
+                        allowedDailyAverage: 0,
+                        status: 'on-track'
                     };
+                }
+
+                const sortedEntries = [...mileageEntries].sort((a, b) => new Date(a.date) - new Date(b.date));
+                const currentKm = sortedEntries[sortedEntries.length - 1].mileage - leaseParams.startingMileage;
+                const startDate = new Date(leaseParams.leaseStartDate);
+                const today = new Date();
+                const daysElapsed = Math.max(1, Math.floor((today - startDate) / (1000 * 60 * 60 * 24)));
+                const dailyAverage = currentKm / daysElapsed;
+                const totalDays = leaseParams.leaseDurationMonths * 30.44;
+                const projectedTotal = dailyAverage * totalDays;
+                const projectedOverage = Math.max(0, projectedTotal - leaseParams.totalAllowedKm);
+                const projectedCost = projectedOverage * leaseParams.costPerExtraKm;
+                const allowedDailyAverage = leaseParams.totalAllowedKm / totalDays;
+                
+                let status = 'on-track';
+                if (dailyAverage > allowedDailyAverage * 1.1) status = 'over';
+                else if (dailyAverage > allowedDailyAverage * 1.05) status = 'warning';
+
+                return {
+                    currentKm,
+                    dailyAverage,
+                    projectedTotal,
+                    projectedOverage,
+                    projectedCost,
+                    allowedDailyAverage,
+                    status
                 };
+            };
 
-                const stats = calculateStats();
+            const stats = calculateStats();
 
-                const getChartData = () => {
-                    if (mileageEntries.length === 0) return [];
+            const getChartData = () => {
+                if (mileageEntries.length === 0) return { labels: [], datasets: [] };
+                
+                const sortedEntries = [...mileageEntries].sort((a, b) => new Date(a.date) - new Date(b.date));
+                const startDate = new Date(leaseParams.leaseStartDate);
+                
+                const labels = [];
+                const actualData = [];
+                const allowedData = [];
+                const projectedData = [];
+
+                sortedEntries.forEach(entry => {
+                    const entryDate = new Date(entry.date);
+                    const daysFromStart = Math.floor((entryDate - startDate) / (1000 * 60 * 60 * 24));
+                    const monthsFromStart = daysFromStart / 30.44;
+                    const allowedAtThisPoint = (leaseParams.totalAllowedKm / leaseParams.leaseDurationMonths) * monthsFromStart;
+                    const drivenKm = entry.mileage - leaseParams.startingMileage;
                     
-                    const sortedEntries = [...mileageEntries].sort((a, b) => new Date(a.date) - new Date(b.date));
-                    const startDate = new Date(leaseParams.leaseStartDate);
-                    
-                    const data = sortedEntries.map(entry => {
-                        const entryDate = new Date(entry.date);
-                        const daysFromStart = Math.floor((entryDate - startDate) / (1000 * 60 * 60 * 24));
-                        const monthsFromStart = daysFromStart / 30.44;
-                        const allowedAtThisPoint = (leaseParams.totalAllowedKm / leaseParams.leaseDurationMonths) * monthsFromStart;
-                        const drivenKm = entry.mileage - leaseParams.startingMileage;
-                        
-                        return {
-                            month: monthsFromStart.toFixed(1),
-                            actual: drivenKm,
-                            allowed: allowedAtThisPoint,
-                            projected: stats.dailyAverage * daysFromStart
-                        };
-                    });
+                    labels.push(monthsFromStart.toFixed(1));
+                    actualData.push(drivenKm);
+                    allowedData.push(allowedAtThisPoint);
+                    projectedData.push(stats.dailyAverage * daysFromStart);
+                });
 
-                    data.push({
-                        month: leaseParams.leaseDurationMonths.toString(),
-                        actual: null,
-                        allowed: leaseParams.totalAllowedKm,
-                        projected: stats.projectedTotal
-                    });
+                // Add end projection
+                labels.push(leaseParams.leaseDurationMonths.toString());
+                actualData.push(null);
+                allowedData.push(leaseParams.totalAllowedKm);
+                projectedData.push(stats.projectedTotal);
 
-                    return data;
+                return {
+                    labels,
+                    datasets: [
+                        {
+                            label: 'Actual',
+                            data: actualData,
+                            borderColor: '#4f46e5',
+                            backgroundColor: '#4f46e5',
+                            borderWidth: 2,
+                            tension: 0.1
+                        },
+                        {
+                            label: 'Allowed',
+                            data: allowedData,
+                            borderColor: '#10b981',
+                            backgroundColor: '#10b981',
+                            borderWidth: 2,
+                            borderDash: [5, 5],
+                            tension: 0.1
+                        },
+                        {
+                            label: 'Projected',
+                            data: projectedData,
+                            borderColor: '#ef4444',
+                            backgroundColor: '#ef4444',
+                            borderWidth: 2,
+                            borderDash: [3, 3],
+                            tension: 0.1
+                        }
+                    ]
                 };
+            };
 
-                const addEntry = () => {
-                    if (newEntry.mileage && newEntry.date) {
-                        const entry = {
-                            id: Date.now(),
-                            date: newEntry.date,
-                            mileage: parseFloat(newEntry.mileage)
-                        };
-                        setMileageEntries([...mileageEntries, entry]);
-                        setNewEntry({ date: new Date().toISOString().split('T')[0], mileage: '' });
+            useEffect(() => {
+                if (mileageEntries.length > 0 && chartRef.current) {
+                    const ctx = chartRef.current.getContext('2d');
+                    
+                    if (chartInstance.current) {
+                        chartInstance.current.destroy();
+                    }
+
+                    const chartData = getChartData();
+                    
+                    chartInstance.current = new Chart(ctx, {
+                        type: 'line',
+                        data: chartData,
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                legend: {
+                                    display: true,
+                                    position: 'top'
+                                },
+                                tooltip: {
+                                    mode: 'index',
+                                    intersect: false
+                                }
+                            },
+                            scales: {
+                                x: {
+                                    title: {
+                                        display: true,
+                                        text: 'Months'
+                                    }
+                                },
+                                y: {
+                                    title: {
+                                        display: true,
+                                        text: 'Kilometers'
+                                    },
+                                    beginAtZero: true
+                                }
+                            }
+                        }
+                    });
+                }
+
+                return () => {
+                    if (chartInstance.current) {
+                        chartInstance.current.destroy();
                     }
                 };
+            }, [mileageEntries, leaseParams]);
 
-                const deleteEntry = (id) => {
-                    setMileageEntries(mileageEntries.filter(e => e.id !== id));
-                };
+            const addEntry = () => {
+                if (newEntry.mileage && newEntry.date) {
+                    const entry = {
+                        id: Date.now(),
+                        date: newEntry.date,
+                        mileage: parseFloat(newEntry.mileage)
+                    };
+                    setMileageEntries([...mileageEntries, entry]);
+                    setNewEntry({ date: new Date().toISOString().split('T')[0], mileage: '' });
+                }
+            };
 
-                return (
-                    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
-                        <div className="max-w-6xl mx-auto">
-                            <div className="bg-white rounded-2xl shadow-xl p-6 mb-6">
-                                <div className="flex items-center justify-between mb-6">
-                                    <div className="flex items-center gap-3">
-                                        <div className="bg-indigo-600 p-3 rounded-xl">
-                                            <svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                                            </svg>
-                                        </div>
-                                        <div>
-                                            <h1 className="text-3xl font-bold text-gray-800">Lease Mileage Tracker</h1>
-                                            <p className="text-gray-600">Monitor and forecast your lease costs</p>
-                                        </div>
+            const deleteEntry = (id) => {
+                setMileageEntries(mileageEntries.filter(e => e.id !== id));
+            };
+
+            return (
+                <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
+                    <div className="max-w-6xl mx-auto">
+                        <div className="bg-white rounded-2xl shadow-xl p-6 mb-6">
+                            <div className="flex items-center justify-between mb-6">
+                                <div className="flex items-center gap-3">
+                                    <div className="bg-indigo-600 p-3 rounded-xl">
+                                        <svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                                        </svg>
                                     </div>
-                                    <div className="flex gap-2">
-                                        <button
-                                            onClick={() => setShowApiSettings(!showApiSettings)}
-                                            className="p-2 hover:bg-gray-100 rounded-lg transition"
-                                            title="Google Sheets Sync"
-                                        >
-                                            <svg className="w-6 h-6 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
-                                            </svg>
-                                        </button>
-                                        <button
-                                            onClick={() => setShowSettings(!showSettings)}
-                                            className="p-2 hover:bg-gray-100 rounded-lg transition"
-                                            title="Lease Parameters"
-                                        >
-                                            <svg className="w-6 h-6 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                                            </svg>
-                                        </button>
+                                    <div>
+                                        <h1 className="text-3xl font-bold text-gray-800">Lease Mileage Tracker</h1>
+                                        <p className="text-gray-600">Monitor and forecast your lease costs</p>
                                     </div>
                                 </div>
+                                <div className="flex gap-2">
+                                    <button
+                                        onClick={() => setShowApiSettings(!showApiSettings)}
+                                        className="p-2 hover:bg-gray-100 rounded-lg transition"
+                                        title="Google Sheets Sync"
+                                    >
+                                        <svg className="w-6 h-6 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+                                        </svg>
+                                    </button>
+                                    <button
+                                        onClick={() => setShowSettings(!showSettings)}
+                                        className="p-2 hover:bg-gray-100 rounded-lg transition"
+                                        title="Lease Parameters"
+                                    >
+                                        <svg className="w-6 h-6 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                        </svg>
+                                    </button>
+                                </div>
+                            </div>
 
-                                {showApiSettings && (
-                                    <div className="bg-blue-50 rounded-xl p-6 mb-6 border-2 border-blue-200">
-                                        <h3 className="text-lg font-semibold mb-4 text-gray-800">Google Sheets Integration</h3>
-                                        <div className="space-y-4">
-                                            <div>
-                                                <label className="block text-sm font-medium text-gray-700 mb-2">
-                                                    Google Apps Script Web App URL
-                                                </label>
-                                                <input
-                                                    type="text"
-                                                    value={scriptUrl}
-                                                    onChange={(e) => setScriptUrl(e.target.value)}
-                                                    placeholder="https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec"
-                                                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-                                                />
+                            {showApiSettings && (
+                                <div className="bg-blue-50 rounded-xl p-6 mb-6 border-2 border-blue-200">
+                                    <h3 className="text-lg font-semibold mb-4 text-gray-800">Google Sheets Integration</h3>
+                                    <div className="space-y-4">
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                                                Google Apps Script Web App URL
+                                            </label>
+                                            <input
+                                                type="text"
+                                                value={scriptUrl}
+                                                onChange={(e) => setScriptUrl(e.target.value)}
+                                                placeholder="https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec"
+                                                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                                            />
+                                        </div>
+                                        <div className="flex gap-3">
+                                            <button
+                                                onClick={saveToGoogleSheets}
+                                                disabled={isLoading || !scriptUrl}
+                                                className="flex-1 bg-green-600 text-white px-4 py-3 rounded-lg hover:bg-green-700 transition font-medium disabled:bg-gray-400 disabled:cursor-not-allowed"
+                                            >
+                                                💾 Save to Sheets
+                                            </button>
+                                            <button
+                                                onClick={loadFromGoogleSheets}
+                                                disabled={isLoading || !scriptUrl}
+                                                className="flex-1 bg-blue-600 text-white px-4 py-3 rounded-lg hover:bg-blue-700 transition font-medium disabled:bg-gray-400 disabled:cursor-not-allowed"
+                                            >
+                                                📥 Load from Sheets
+                                            </button>
+                                        </div>
+                                        {syncStatus && (
+                                            <div className={`p-3 rounded-lg text-sm ${syncStatus.includes('✓') ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                                                {syncStatus}
                                             </div>
-                                            <div className="flex gap-3">
-                                                <button
-                                                    onClick={saveToGoogleSheets}
-                                                    disabled={isLoading || !scriptUrl}
-                                                    className="flex-1 bg-green-600 text-white px-4 py-3 rounded-lg hover:bg-green-700 transition font-medium disabled:bg-gray-400 disabled:cursor-not-allowed"
-                                                >
-                                                    💾 Save to Sheets
-                                                </button>
-                                                <button
-                                                    onClick={loadFromGoogleSheets}
-                                                    disabled={isLoading || !scriptUrl}
-                                                    className="flex-1 bg-blue-600 text-white px-4 py-3 rounded-lg hover:bg-blue-700 transition font-medium disabled:bg-gray-400 disabled:cursor-not-allowed"
-                                                >
-                                                    📥 Load from Sheets
-                                                </button>
-                                            </div>
-                                            {syncStatus && (
-                                                <div className={`p-3 rounded-lg text-sm ${syncStatus.includes('✓') ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                                                    {syncStatus}
-                                                </div>
-                                            )}
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+
+                            {showSettings && (
+                                <div className="bg-gray-50 rounded-xl p-6 mb-6">
+                                    <h3 className="text-lg font-semibold mb-4 text-gray-800">Lease Parameters</h3>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-2">Starting Mileage (km)</label>
+                                            <input
+                                                type="number"
+                                                value={leaseParams.startingMileage}
+                                                onChange={(e) => setLeaseParams({...leaseParams, startingMileage: parseFloat(e.target.value) || 0})}
+                                                className="w-full p-3 border border-gray-300 rounded-lg"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-2">Total Allowed KM</label>
+                                            <input
+                                                type="number"
+                                                value={leaseParams.totalAllowedKm}
+                                                onChange={(e) => setLeaseParams({...leaseParams, totalAllowedKm: parseFloat(e.target.value)})}
+                                                className="w-full p-3 border border-gray-300 rounded-lg"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-2">Cost per Extra KM (€)</label>
+                                            <input
+                                                type="number"
+                                                step="0.01"
+                                                value={leaseParams.costPerExtraKm}
+                                                onChange={(e) => setLeaseParams({...leaseParams, costPerExtraKm: parseFloat(e.target.value)})}
+                                                className="w-full p-3 border border-gray-300 rounded-lg"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-2">Lease Duration (Months)</label>
+                                            <input
+                                                type="number"
+                                                value={leaseParams.leaseDurationMonths}
+                                                onChange={(e) => setLeaseParams({...leaseParams, leaseDurationMonths: parseInt(e.target.value)})}
+                                                className="w-full p-3 border border-gray-300 rounded-lg"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-2">Lease Start Date</label>
+                                            <input
+                                                type="date"
+                                                value={leaseParams.leaseStartDate}
+                                                onChange={(e) => setLeaseParams({...leaseParams, leaseStartDate: e.target.value})}
+                                                className="w-full p-3 border border-gray-300 rounded-lg"
+                                            />
                                         </div>
                                     </div>
-                                )}
+                                </div>
+                            )}
 
-                                {showSettings && (
-                                    <div className="bg-gray-50 rounded-xl p-6 mb-6">
-                                        <h3 className="text-lg font-semibold mb-4 text-gray-800">Lease Parameters</h3>
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                            <div>
-                                                <label className="block text-sm font-medium text-gray-700 mb-2">Starting Mileage (km)</label>
-                                                <input
-                                                    type="number"
-                                                    value={leaseParams.startingMileage}
-                                                    onChange={(e) => setLeaseParams({...leaseParams, startingMileage: parseFloat(e.target.value) || 0})}
-                                                    className="w-full p-3 border border-gray-300 rounded-lg"
-                                                />
-                                            </div>
-                                            <div>
-                                                <label className="block text-sm font-medium text-gray-700 mb-2">Total Allowed KM</label>
-                                                <input
-                                                    type="number"
-                                                    value={leaseParams.totalAllowedKm}
-                                                    onChange={(e) => setLeaseParams({...leaseParams, totalAllowedKm: parseFloat(e.target.value)})}
-                                                    className="w-full p-3 border border-gray-300 rounded-lg"
-                                                />
-                                            </div>
-                                            <div>
-                                                <label className="block text-sm font-medium text-gray-700 mb-2">Cost per Extra KM (€)</label>
-                                                <input
-                                                    type="number"
-                                                    step="0.01"
-                                                    value={leaseParams.costPerExtraKm}
-                                                    onChange={(e) => setLeaseParams({...leaseParams, costPerExtraKm: parseFloat(e.target.value)})}
-                                                    className="w-full p-3 border border-gray-300 rounded-lg"
-                                                />
-                                            </div>
-                                            <div>
-                                                <label className="block text-sm font-medium text-gray-700 mb-2">Lease Duration (Months)</label>
-                                                <input
-                                                    type="number"
-                                                    value={leaseParams.leaseDurationMonths}
-                                                    onChange={(e) => setLeaseParams({...leaseParams, leaseDurationMonths: parseInt(e.target.value)})}
-                                                    className="w-full p-3 border border-gray-300 rounded-lg"
-                                                />
-                                            </div>
-                                            <div>
-                                                <label className="block text-sm font-medium text-gray-700 mb-2">Lease Start Date</label>
-                                                <input
-                                                    type="date"
-                                                    value={leaseParams.leaseStartDate}
-                                                    onChange={(e) => setLeaseParams({...leaseParams, leaseStartDate: e.target.value})}
-                                                    className="w-full p-3 border border-gray-300 rounded-lg"
-                                                />
-                                            </div>
-                                        </div>
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                                <div className={`p-4 rounded-xl ${stats.status === 'over' ? 'bg-red-50' : stats.status === 'warning' ? 'bg-yellow-50' : 'bg-green-50'}`}>
+                                    <div className="text-sm font-medium text-gray-600 mb-2">Daily Average</div>
+                                    <div className="text-2xl font-bold text-gray-800">{stats.dailyAverage.toFixed(1)} km</div>
+                                    <div className="text-sm text-gray-600 mt-1">Target: {stats.allowedDailyAverage.toFixed(1)} km/day</div>
+                                </div>
+
+                                <div className="bg-indigo-50 p-4 rounded-xl">
+                                    <div className="text-sm font-medium text-gray-600 mb-2">Projected Total</div>
+                                    <div className="text-2xl font-bold text-gray-800">{Math.round(stats.projectedTotal).toLocaleString()} km</div>
+                                    <div className="text-sm text-gray-600 mt-1">Limit: {leaseParams.totalAllowedKm.toLocaleString()} km</div>
+                                </div>
+
+                                <div className={`p-4 rounded-xl ${stats.projectedCost > 0 ? 'bg-red-50' : 'bg-green-50'}`}>
+                                    <div className="text-sm font-medium text-gray-600 mb-2">Projected Cost</div>
+                                    <div className="text-2xl font-bold text-gray-800">€{stats.projectedCost.toFixed(2)}</div>
+                                    <div className="text-sm text-gray-600 mt-1">Overage: {Math.round(stats.projectedOverage)} km</div>
+                                </div>
+                            </div>
+
+                            {mileageEntries.length > 0 && (
+                                <div className="bg-gray-50 rounded-xl p-6 mb-6">
+                                    <h3 className="text-lg font-semibold mb-4 text-gray-800">Mileage Projection</h3>
+                                    <div style={{ height: '300px' }}>
+                                        <canvas ref={chartRef}></canvas>
                                     </div>
-                                )}
+                                </div>
+                            )}
 
-                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-                                    <div className={`p-4 rounded-xl ${stats.status === 'over' ? 'bg-red-50' : stats.status === 'warning' ? 'bg-yellow-50' : 'bg-green-50'}`}>
-                                        <div className="text-sm font-medium text-gray-600 mb-2">Daily Average</div>
-                                        <div className="text-2xl font-bold text-gray-800">{stats.dailyAverage.toFixed(1)} km</div>
-                                        <div className="text-sm text-gray-600 mt-1">Target: {stats.allowedDailyAverage.toFixed(1)} km/day</div>
+                            <div className="bg-gray-50 rounded-xl p-6">
+                                <h3 className="text-lg font-semibold mb-4 text-gray-800">Add Mileage Entry</h3>
+                                <div className="flex gap-4 mb-4 flex-wrap">
+                                    <div className="flex-1 min-w-[200px]">
+                                        <label className="block text-sm font-medium text-gray-700 mb-2">Date</label>
+                                        <input
+                                            type="date"
+                                            value={newEntry.date}
+                                            onChange={(e) => setNewEntry({...newEntry, date: e.target.value})}
+                                            className="w-full p-3 border border-gray-300 rounded-lg"
+                                        />
                                     </div>
-
-                                    <div className="bg-indigo-50 p-4 rounded-xl">
-                                        <div className="text-sm font-medium text-gray-600 mb-2">Projected Total</div>
-                                        <div className="text-2xl font-bold text-gray-800">{Math.round(stats.projectedTotal).toLocaleString()} km</div>
-                                        <div className="text-sm text-gray-600 mt-1">Limit: {leaseParams.totalAllowedKm.toLocaleString()} km</div>
+                                    <div className="flex-1 min-w-[200px]">
+                                        <label className="block text-sm font-medium text-gray-700 mb-2">Mileage (km)</label>
+                                        <input
+                                            type="number"
+                                            value={newEntry.mileage}
+                                            onChange={(e) => setNewEntry({...newEntry, mileage: e.target.value})}
+                                            placeholder="Enter current mileage"
+                                            className="w-full p-3 border border-gray-300 rounded-lg"
+                                        />
                                     </div>
-
-                                    <div className={`p-4 rounded-xl ${stats.projectedCost > 0 ? 'bg-red-50' : 'bg-green-50'}`}>
-                                        <div className="text-sm font-medium text-gray-600 mb-2">Projected Cost</div>
-                                        <div className="text-2xl font-bold text-gray-800">€{stats.projectedCost.toFixed(2)}</div>
-                                        <div className="text-sm text-gray-600 mt-1">Overage: {Math.round(stats.projectedOverage)} km</div>
+                                    <div className="flex items-end">
+                                        <button
+                                            onClick={addEntry}
+                                            className="bg-indigo-600 text-white px-6 py-3 rounded-lg hover:bg-indigo-700 transition font-medium whitespace-nowrap"
+                                        >
+                                            Add Entry
+                                        </button>
                                     </div>
                                 </div>
 
                                 {mileageEntries.length > 0 && (
-                                    <div className="bg-gray-50 rounded-xl p-6 mb-6">
-                                        <h3 className="text-lg font-semibold mb-4 text-gray-800">Mileage Projection</h3>
-                                        <ResponsiveContainer width="100%" height={300}>
-                                            <LineChart data={getChartData()}>
-                                                <CartesianGrid strokeDasharray="3 3" />
-                                                <XAxis dataKey="month" label={{ value: 'Months', position: 'insideBottom', offset: -5 }} />
-                                                <YAxis label={{ value: 'Kilometers', angle: -90, position: 'insideLeft' }} />
-                                                <Tooltip />
-                                                <Legend />
-                                                <Line type="monotone" dataKey="actual" stroke="#4f46e5" strokeWidth={2} name="Actual" />
-                                                <Line type="monotone" dataKey="allowed" stroke="#10b981" strokeWidth={2} strokeDasharray="5 5" name="Allowed" />
-                                                <Line type="monotone" dataKey="projected" stroke="#ef4444" strokeWidth={2} strokeDasharray="3 3" name="Projected" />
-                                            </LineChart>
-                                        </ResponsiveContainer>
+                                    <div className="mt-4">
+                                        <h4 className="text-sm font-semibold text-gray-700 mb-3">Recent Entries</h4>
+                                        <div className="space-y-2 max-h-60 overflow-y-auto">
+                                            {[...mileageEntries].sort((a, b) => new Date(b.date) - new Date(a.date)).map(entry => (
+                                                <div key={entry.id} className="flex justify-between items-center bg-white p-3 rounded-lg">
+                                                    <div>
+                                                        <span className="font-medium text-gray-800">{entry.mileage.toLocaleString()} km</span>
+                                                        <span className="text-gray-500 text-sm ml-3">{new Date(entry.date).toLocaleDateString()}</span>
+                                                    </div>
+                                                    <button
+                                                        onClick={() => deleteEntry(entry.id)}
+                                                        className="text-red-600 hover:text-red-800 text-sm font-medium"
+                                                    >
+                                                        Delete
+                                                    </button>
+                                                </div>
+                                            ))}
+                                        </div>
                                     </div>
                                 )}
-
-                                <div className="bg-gray-50 rounded-xl p-6">
-                                    <h3 className="text-lg font-semibold mb-4 text-gray-800">Add Mileage Entry</h3>
-                                    <div className="flex gap-4 mb-4 flex-wrap">
-                                        <div className="flex-1 min-w-[200px]">
-                                            <label className="block text-sm font-medium text-gray-700 mb-2">Date</label>
-                                            <input
-                                                type="date"
-                                                value={newEntry.date}
-                                                onChange={(e) => setNewEntry({...newEntry, date: e.target.value})}
-                                                className="w-full p-3 border border-gray-300 rounded-lg"
-                                            />
-                                        </div>
-                                        <div className="flex-1 min-w-[200px]">
-                                            <label className="block text-sm font-medium text-gray-700 mb-2">Mileage (km)</label>
-                                            <input
-                                                type="number"
-                                                value={newEntry.mileage}
-                                                onChange={(e) => setNewEntry({...newEntry, mileage: e.target.value})}
-                                                placeholder="Enter current mileage"
-                                                className="w-full p-3 border border-gray-300 rounded-lg"
-                                            />
-                                        </div>
-                                        <div className="flex items-end">
-                                            <button
-                                                onClick={addEntry}
-                                                className="bg-indigo-600 text-white px-6 py-3 rounded-lg hover:bg-indigo-700 transition font-medium whitespace-nowrap"
-                                            >
-                                                Add Entry
-                                            </button>
-                                        </div>
-                                    </div>
-
-                                    {mileageEntries.length > 0 && (
-                                        <div className="mt-4">
-                                            <h4 className="text-sm font-semibold text-gray-700 mb-3">Recent Entries</h4>
-                                            <div className="space-y-2 max-h-60 overflow-y-auto">
-                                                {[...mileageEntries].sort((a, b) => new Date(b.date) - new Date(a.date)).map(entry => (
-                                                    <div key={entry.id} className="flex justify-between items-center bg-white p-3 rounded-lg">
-                                                        <div>
-                                                            <span className="font-medium text-gray-800">{entry.mileage.toLocaleString()} km</span>
-                                                            <span className="text-gray-500 text-sm ml-3">{new Date(entry.date).toLocaleDateString()}</span>
-                                                        </div>
-                                                        <button
-                                                            onClick={() => deleteEntry(entry.id)}
-                                                            className="text-red-600 hover:text-red-800 text-sm font-medium"
-                                                        >
-                                                            Delete
-                                                        </button>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
                             </div>
                         </div>
                     </div>
-                );
-            }
+                </div>
+            );
+        }
 
-            const root = ReactDOM.createRoot(document.getElementById('root'));
-            root.render(React.createElement(LeaseMileageTracker));
-        });
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(React.createElement(LeaseMileageTracker));
     </script>
 </body>
 </html>
