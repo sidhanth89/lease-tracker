@@ -5,28 +5,36 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Lease Mileage Tracker</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <script src="https://unpkg.com/recharts@2.5.0/dist/Recharts.js"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone@7.23.5/babel.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/recharts@2.5.0/dist/Recharts.js"></script>
 </head>
 <body>
     <div id="root"></div>
     
-    <script type="text/babel">
+    <script type="text/babel" data-type="module">
         const { useState, useEffect } = React;
-        const { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } = Recharts;
+        const { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } = window.Recharts || {};
 
         function LeaseMileageTracker() {
             const getInitialScriptUrl = () => {
-                const saved = localStorage.getItem('scriptUrl');
-                return saved || '';
+                try {
+                    const saved = localStorage.getItem('scriptUrl');
+                    return saved || '';
+                } catch(e) {
+                    return '';
+                }
             };
 
             const loadSavedData = () => {
-                const saved = localStorage.getItem('leaseTrackerData');
-                if (saved) {
-                    return JSON.parse(saved);
+                try {
+                    const saved = localStorage.getItem('leaseTrackerData');
+                    if (saved) {
+                        return JSON.parse(saved);
+                    }
+                } catch(e) {
+                    console.error('Error loading saved data:', e);
                 }
                 return {
                     leaseParams: {
@@ -56,15 +64,23 @@
             const [isLoading, setIsLoading] = useState(false);
 
             useEffect(() => {
-                localStorage.setItem('leaseTrackerData', JSON.stringify({
-                    leaseParams,
-                    mileageEntries
-                }));
+                try {
+                    localStorage.setItem('leaseTrackerData', JSON.stringify({
+                        leaseParams,
+                        mileageEntries
+                    }));
+                } catch(e) {
+                    console.error('Error saving data:', e);
+                }
             }, [leaseParams, mileageEntries]);
 
             useEffect(() => {
-                if (scriptUrl) {
-                    localStorage.setItem('scriptUrl', scriptUrl);
+                try {
+                    if (scriptUrl) {
+                        localStorage.setItem('scriptUrl', scriptUrl);
+                    }
+                } catch(e) {
+                    console.error('Error saving script URL:', e);
                 }
             }, [scriptUrl]);
 
@@ -419,7 +435,7 @@
                                 </div>
                             </div>
 
-                            {mileageEntries.length > 0 && (
+                            {mileageEntries.length > 0 && ResponsiveContainer && (
                                 <div className="bg-gray-50 rounded-xl p-6 mb-6">
                                     <h3 className="text-lg font-semibold mb-4 text-gray-800">Mileage Projection</h3>
                                     <ResponsiveContainer width="100%" height={300}>
@@ -439,8 +455,8 @@
 
                             <div className="bg-gray-50 rounded-xl p-6">
                                 <h3 className="text-lg font-semibold mb-4 text-gray-800">Add Mileage Entry</h3>
-                                <div className="flex gap-4 mb-4">
-                                    <div className="flex-1">
+                                <div className="flex gap-4 mb-4 flex-wrap">
+                                    <div className="flex-1 min-w-[200px]">
                                         <label className="block text-sm font-medium text-gray-700 mb-2">Date</label>
                                         <input
                                             type="date"
@@ -449,7 +465,7 @@
                                             className="w-full p-3 border border-gray-300 rounded-lg"
                                         />
                                     </div>
-                                    <div className="flex-1">
+                                    <div className="flex-1 min-w-[200px]">
                                         <label className="block text-sm font-medium text-gray-700 mb-2">Mileage (km)</label>
                                         <input
                                             type="number"
@@ -462,7 +478,7 @@
                                     <div className="flex items-end">
                                         <button
                                             onClick={addEntry}
-                                            className="bg-indigo-600 text-white px-6 py-3 rounded-lg hover:bg-indigo-700 transition font-medium"
+                                            className="bg-indigo-600 text-white px-6 py-3 rounded-lg hover:bg-indigo-700 transition font-medium whitespace-nowrap"
                                         >
                                             Add Entry
                                         </button>
@@ -497,7 +513,8 @@
             );
         }
 
-        ReactDOM.render(React.createElement(LeaseMileageTracker), document.getElementById('root'));
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(React.createElement(LeaseMileageTracker));
     </script>
 </body>
 </html>
