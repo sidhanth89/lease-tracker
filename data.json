@@ -1,0 +1,11 @@
+{
+  "leaseParams": {
+    "totalAllowedKm": 30000,
+    "costPerExtraKm": 0.1815,
+    "leaseDurationMonths": 36,
+    "leaseStartDate": "2025-07-29",
+    "startingMileage": 34593
+  },
+  "mileageEntries": [],
+  "lastUpdated": "2025-10-12T12:54:48.983Z"
+}
