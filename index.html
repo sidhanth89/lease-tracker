@@ -436,62 +436,66 @@
             };
 
             const calculateStats = () => {
-                if (mileageEntries.length === 0) {
-                    return {
-                        currentKm: 0,
-                        dailyAverage: 0,
-                        projectedTotal: 0,
-                        projectedOverage: 0,
-                        projectedCost: 0,
-                        allowedDailyAverage: 0,
-                        status: 'on-track',
-                        daysElapsed: 0,
-                        daysRemaining: 0,
-                        percentageComplete: 0,
-                        kmRemaining: 0
-                    };
-                }
+    if (mileageEntries.length === 0) {
+        return {
+            currentKm: 0,
+            dailyAverage: 0,
+            projectedTotal: 0,
+            projectedOverage: 0,
+            projectedCost: 0,
+            allowedDailyAverage: 0,
+            status: 'on-track',
+            daysElapsed: 0,
+            daysRemaining: 0,
+            percentageComplete: 0,
+            kmRemaining: 0
+        };
+    }
 
-                const sortedEntries = [...mileageEntries].sort((a, b) => new Date(a.date) - new Date(b.date));
-                const currentKm = sortedEntries[sortedEntries.length - 1].mileage - leaseParams.startingMileage;
-                const startDate = new Date(leaseParams.leaseStartDate);
-                const today = new Date();
-                const endDate = new Date(startDate);
-                endDate.setMonth(endDate.getMonth() + leaseParams.leaseDurationMonths);
-                
-                const daysElapsed = Math.max(1, Math.floor((today - startDate) / (1000 * 60 * 60 * 24)));
-                const totalDays = leaseParams.leaseDurationMonths * 30.44;
-                const daysRemaining = Math.max(0, totalDays - daysElapsed);
-                const percentageComplete = Math.min(100, (daysElapsed / totalDays) * 100);
-                
-                const dailyAverage = currentKm / daysElapsed;
-                const projectedTotal = dailyAverage * totalDays;
-                const projectedOverage = Math.max(0, projectedTotal - leaseParams.totalAllowedKm);
-                const projectedCost = projectedOverage * leaseParams.costPerExtraKm;
-                const allowedDailyAverage = leaseParams.totalAllowedKm / totalDays;
-                const kmRemaining = Math.max(0, leaseParams.totalAllowedKm - currentKm);
-                const suggestedDailyAverage = daysRemaining > 0 ? kmRemaining / daysRemaining : 0;
-                
-                let status = 'on-track';
-                if (dailyAverage > allowedDailyAverage * 1.1) status = 'over';
-                else if (dailyAverage > allowedDailyAverage * 1.05) status = 'warning';
+    const sortedEntries = [...mileageEntries].sort((a, b) => new Date(a.date) - new Date(b.date));
+    const latestEntry = sortedEntries[sortedEntries.length - 1];
+    const currentKm = latestEntry.mileage - leaseParams.startingMileage;
+    
+    const startDate = new Date(leaseParams.leaseStartDate);
+    const today = new Date();
+    const latestEntryDate = new Date(latestEntry.date);
+    const endDate = new Date(startDate);
+    endDate.setMonth(endDate.getMonth() + leaseParams.leaseDurationMonths);
+    
+    const daysElapsed = Math.max(1, Math.floor((latestEntryDate - startDate) / (1000 * 60 * 60 * 24)));
+    const totalDays = leaseParams.leaseDurationMonths * 30.44;
+    const daysRemaining = Math.max(0, totalDays - daysElapsed);
+    const percentageComplete = Math.min(100, (daysElapsed / totalDays) * 100);
+    
+    // Use actual driven km from latest entry instead of today's date
+    const dailyAverage = currentKm / daysElapsed;
+    const projectedTotal = currentKm + (dailyAverage * daysRemaining);
+    const projectedOverage = Math.max(0, projectedTotal - leaseParams.totalAllowedKm);
+    const projectedCost = projectedOverage * leaseParams.costPerExtraKm;
+    const allowedDailyAverage = leaseParams.totalAllowedKm / totalDays;
+    const kmRemaining = Math.max(0, leaseParams.totalAllowedKm - currentKm);
+    const suggestedDailyAverage = daysRemaining > 0 ? kmRemaining / daysRemaining : 0;
+    
+    let status = 'on-track';
+    if (dailyAverage > allowedDailyAverage * 1.1) status = 'over';
+    else if (dailyAverage > allowedDailyAverage * 1.05) status = 'warning';
 
-                return {
-                    currentKm,
-                    dailyAverage,
-                    projectedTotal,
-                    projectedOverage,
-                    projectedCost,
-                    allowedDailyAverage,
-                    status,
-                    daysElapsed,
-                    daysRemaining,
-                    percentageComplete,
-                    kmRemaining,
-                    suggestedDailyAverage,
-                    leaseEndDate: endDate
-                };
-            };
+    return {
+        currentKm,
+        dailyAverage,
+        projectedTotal,
+        projectedOverage,
+        projectedCost,
+        allowedDailyAverage,
+        status,
+        daysElapsed,
+        daysRemaining,
+        percentageComplete,
+        kmRemaining,
+        suggestedDailyAverage,
+        leaseEndDate: endDate
+    };
+};
 
             const stats = calculateStats();
             const getChartData = () => {
