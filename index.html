@@ -22,8 +22,24 @@
 
             const getInitialToken = () => {
                 try {
+                    // Try to get from URL parameter first (for App Store integration)
+                    const urlParams = new URLSearchParams(window.location.search);
+                    const tokenFromUrl = urlParams.get('token');
+                    if (tokenFromUrl) {
+                        localStorage.setItem('githubToken', tokenFromUrl);
+                        // Clean URL after saving token
+                        window.history.replaceState({}, document.title, window.location.pathname);
+                        return tokenFromUrl;
+                    }
+                    
+                    // Then try localStorage
                     const saved = localStorage.getItem('githubToken');
-                    return saved || '';
+                    if (saved) return saved;
+                    
+                    // Finally check if it's embedded in the page
+                    if (window.GITHUB_TOKEN) return window.GITHUB_TOKEN;
+                    
+                    return '';
                 } catch(e) {
                     return '';
                 }
@@ -61,9 +77,15 @@
             
             const [showSettings, setShowSettings] = useState(false);
             const [showApiSettings, setShowApiSettings] = useState(false);
+            const [showTripPlanner, setShowTripPlanner] = useState(false);
             const [githubToken, setGithubToken] = useState(getInitialToken());
             const [syncStatus, setSyncStatus] = useState('');
             const [isLoading, setIsLoading] = useState(false);
+            
+            const [tripFrom, setTripFrom] = useState('');
+            const [tripTo, setTripTo] = useState('');
+            const [tripDistance, setTripDistance] = useState(null);
+            const [tripCalculating, setTripCalculating] = useState(false);
 
             const GITHUB_REPO = 'sidhanth89/lease-tracker';
             const DATA_FILE = 'data.json';
