@@ -84,11 +84,13 @@
             
             const [tripFrom, setTripFrom] = useState('');
             const [tripTo, setTripTo] = useState('');
+            const [tripDate, setTripDate] = useState(new Date().toISOString().split('T')[0]);
             const [tripDistance, setTripDistance] = useState(null);
             const [tripCalculating, setTripCalculating] = useState(false);
             const [tripError, setTripError] = useState('');
             const [fromCoords, setFromCoords] = useState(null);
             const [toCoords, setToCoords] = useState(null);
+            const [showTripOnChart, setShowTripOnChart] = useState(false);
 
             const GITHUB_REPO = 'sidhanth89/lease-tracker';
             const DATA_FILE = 'data.json';
@@ -264,6 +266,13 @@
                     const stats = calculateStats();
                     const oneWayKm = route.distance;
                     const roundTripKm = oneWayKm * 2;
+                    
+                    // Calculate which month the trip falls into
+                    const startDate = new Date(leaseParams.leaseStartDate);
+                    const tripDateObj = new Date(tripDate);
+                    const daysFromStart = Math.floor((tripDateObj - startDate) / (1000 * 60 * 60 * 24));
+                    const tripMonthIndex = Math.floor(daysFromStart / 30.44);
+                    
                     const newProjectedTotal = stats.projectedTotal + roundTripKm;
                     const newOverage = Math.max(0, newProjectedTotal - leaseParams.totalAllowedKm);
                     const additionalCost = (newOverage - stats.projectedOverage) * leaseParams.costPerExtraKm;
@@ -275,8 +284,11 @@
                         newOverage,
                         additionalCost,
                         fromName: tripFrom || 'Selected location',
-                        toName: tripTo || 'Selected location'
+                        toName: tripTo || 'Selected location',
+                        tripDate: tripDate,
+                        tripMonthIndex: tripMonthIndex
                     });
+                    setShowTripOnChart(true);
                 } catch (error) {
                     setTripError(error.message);
                 } finally {
@@ -287,10 +299,12 @@
             const clearTrip = () => {
                 setTripFrom('');
                 setTripTo('');
+                setTripDate(new Date().toISOString().split('T')[0]);
                 setTripDistance(null);
                 setTripError('');
                 setFromCoords(null);
                 setToCoords(null);
+                setShowTripOnChart(false);
 
                 if (mapInstance.current) {
                     if (fromMarkerRef.current) {
@@ -432,7 +446,11 @@
                         projectedOverage: 0,
                         projectedCost: 0,
                         allowedDailyAverage: 0,
-                        status: 'on-track'
+                        status: 'on-track',
+                        daysElapsed: 0,
+                        daysRemaining: 0,
+                        percentageComplete: 0,
+                        kmRemaining: 0
                     };
                 }
 
@@ -440,13 +458,21 @@
                 const currentKm = sortedEntries[sortedEntries.length - 1].mileage - leaseParams.startingMileage;
                 const startDate = new Date(leaseParams.leaseStartDate);
                 const today = new Date();
+                const endDate = new Date(startDate);
+                endDate.setMonth(endDate.getMonth() + leaseParams.leaseDurationMonths);
+                
                 const daysElapsed = Math.max(1, Math.floor((today - startDate) / (1000 * 60 * 60 * 24)));
-                const dailyAverage = currentKm / daysElapsed;
                 const totalDays = leaseParams.leaseDurationMonths * 30.44;
+                const daysRemaining = Math.max(0, totalDays - daysElapsed);
+                const percentageComplete = Math.min(100, (daysElapsed / totalDays) * 100);
+                
+                const dailyAverage = currentKm / daysElapsed;
                 const projectedTotal = dailyAverage * totalDays;
                 const projectedOverage = Math.max(0, projectedTotal - leaseParams.totalAllowedKm);
                 const projectedCost = projectedOverage * leaseParams.costPerExtraKm;
                 const allowedDailyAverage = leaseParams.totalAllowedKm / totalDays;
+                const kmRemaining = Math.max(0, leaseParams.totalAllowedKm - currentKm);
+                const suggestedDailyAverage = daysRemaining > 0 ? kmRemaining / daysRemaining : 0;
                 
                 let status = 'on-track';
                 if (dailyAverage > allowedDailyAverage * 1.1) status = 'over';
@@ -459,7 +485,13 @@
                     projectedOverage,
                     projectedCost,
                     allowedDailyAverage,
-                    status
+                    status,
+                    daysElapsed,
+                    daysRemaining,
+                    percentageComplete,
+                    kmRemaining,
+                    suggestedDailyAverage,
+                    leaseEndDate: endDate
                 };
             };
 
@@ -478,6 +510,7 @@
                 const actualData = new Array(totalMonths + 1).fill(null);
                 const allowedData = [];
                 const projectedData = [];
+                const tripProjectedData = showTripOnChart && tripDistance ? [] : null;
                 
                 const kmPerMonth = leaseParams.totalAllowedKm / totalMonths;
                 
@@ -525,52 +558,99 @@
                                 projectedData.push(stats.dailyAverage * (i * 30.44));
                             }
                         }
+
+                        // NEW: Trip projection with specific date impact
+                        if (tripProjectedData !== null && tripDistance) {
+                            const currentMonthIndex = Math.floor(currentMonthsElapsed);
+                            const tripMonth = tripDistance.tripMonthIndex;
+                            
+                            for (let i = 0; i <= totalMonths; i++) {
+                                if (i < tripMonth) {
+                                    // Before trip month - use current pace
+                                    if (i <= currentMonthsElapsed) {
+                                        tripProjectedData.push(actualData[i] !== null ? actualData[i] : stats.dailyAverage * (i * 30.44));
+                                    } else {
+                                        tripProjectedData.push(stats.dailyAverage * (i * 30.44));
+                                    }
+                                } else if (i === tripMonth) {
+                                    // Trip month - add the trip distance
+                                    const baseKm = stats.dailyAverage * (i * 30.44);
+                                    tripProjectedData.push(baseKm + tripDistance.roundTrip);
+                                } else {
+                                    // After trip month - continue at current pace but offset by trip distance
+                                    tripProjectedData.push(stats.dailyAverage * (i * 30.44) + tripDistance.roundTrip);
+                                }
+                            }
+                        }
                     } else {
                         projectedData.push(...new Array(totalMonths + 1).fill(null));
+                        if (tripProjectedData !== null) {
+                            tripProjectedData.push(...new Array(totalMonths + 1).fill(null));
+                        }
                     }
                 } else {
                     projectedData.push(...new Array(totalMonths + 1).fill(null));
+                    if (tripProjectedData !== null) {
+                        tripProjectedData.push(...new Array(totalMonths + 1).fill(null));
+                    }
                 }
 
-                return {
-                    labels,
-                    datasets: [
-                        {
-                            label: 'Your Actual Usage',
-                            data: actualData,
-                            borderColor: '#4f46e5',
-                            backgroundColor: 'rgba(79, 70, 229, 0.1)',
-                            borderWidth: 3,
-                            tension: 0.4,
-                            pointRadius: 4,
-                            pointHoverRadius: 6,
-                            fill: true
-                        },
-                        {
-                            label: 'Allowed Limit',
-                            data: allowedData,
-                            borderColor: '#10b981',
-                            backgroundColor: 'transparent',
-                            borderWidth: 2,
-                            borderDash: [10, 5],
-                            tension: 0,
-                            pointRadius: 0,
-                            pointHoverRadius: 4
-                        },
-                        {
-                            label: 'Projected at Current Pace',
-                            data: projectedData,
-                            borderColor: '#ef4444',
-                            backgroundColor: 'rgba(239, 68, 68, 0.05)',
-                            borderWidth: 2,
-                            borderDash: [5, 5],
-                            tension: 0.4,
-                            pointRadius: 0,
-                            pointHoverRadius: 4,
-                            fill: false
-                        }
-                    ]
-                };
+                const datasets = [
+                    {
+                        label: 'Your Actual Usage',
+                        data: actualData,
+                        borderColor: '#4f46e5',
+                        backgroundColor: 'rgba(79, 70, 229, 0.1)',
+                        borderWidth: 3,
+                        tension: 0.4,
+                        pointRadius: 5,
+                        pointHoverRadius: 7,
+                        fill: true,
+                        pointBackgroundColor: '#4f46e5',
+                        pointBorderColor: '#fff',
+                        pointBorderWidth: 2
+                    },
+                    {
+                        label: 'Allowed Limit',
+                        data: allowedData,
+                        borderColor: '#10b981',
+                        backgroundColor: 'transparent',
+                        borderWidth: 3,
+                        borderDash: [10, 5],
+                        tension: 0,
+                        pointRadius: 0,
+                        pointHoverRadius: 5
+                    },
+                    {
+                        label: 'Current Pace Projection',
+                        data: projectedData,
+                        borderColor: '#ef4444',
+                        backgroundColor: 'rgba(239, 68, 68, 0.05)',
+                        borderWidth: 2,
+                        borderDash: [5, 5],
+                        tension: 0.4,
+                        pointRadius: 0,
+                        pointHoverRadius: 5,
+                        fill: false
+                    }
+                ];
+
+                if (tripProjectedData !== null) {
+                    datasets.push({
+                        label: '📍 With Planned Trip',
+                        data: tripProjectedData,
+                        borderColor: '#f59e0b',
+                        backgroundColor: 'rgba(245, 158, 11, 0.1)',
+                        borderWidth: 3,
+                        borderDash: [8, 4],
+                        tension: 0.4,
+                        pointRadius: 0,
+                        pointHoverRadius: 5,
+                        fill: false
+                    });
+                }
+
+                return { labels, datasets };
             };
 
             useEffect(() => {
@@ -595,25 +675,27 @@
                                     position: 'top',
                                     labels: {
                                         font: {
-                                            size: 14,
+                                            size: 13,
                                             weight: 'bold'
                                         },
                                         padding: 15,
-                                        usePointStyle: true
+                                        usePointStyle: true,
+                                        pointStyle: 'circle'
                                     }
                                 },
                                 tooltip: {
                                     mode: 'index',
                                     intersect: false,
-                                    backgroundColor: 'rgba(0, 0, 0, 0.8)',
-                                    padding: 12,
+                                    backgroundColor: 'rgba(0, 0, 0, 0.9)',
+                                    padding: 15,
                                     titleFont: {
-                                        size: 14,
+                                        size: 15,
                                         weight: 'bold'
                                     },
                                     bodyFont: {
                                         size: 13
                                     },
+                                    bodySpacing: 8,
                                     callbacks: {
                                         title: function(context) {
                                             return 'Month ' + context[0].label + ' of ' + leaseParams.leaseDurationMonths;
@@ -627,492 +709,38 @@
                                                 label += Math.round(context.parsed.y).toLocaleString() + ' km';
                                             }
                                             return label;
+                                        },
+                                        afterBody: function(context) {
+                                            const datasets = context[0].chart.data.datasets;
+                                            const index = context[0].dataIndex;
+                                            
+                                            let actualValue = null;
+                                            let allowedValue = null;
+                                            
+                                            for (let i = 0; i < datasets.length; i++) {
+                                                if (datasets[i].label.includes('Actual')) {
+                                                    actualValue = datasets[i].data[index];
+                                                } else if (datasets[i].label.includes('Allowed')) {
+                                                    allowedValue = datasets[i].data[index];
+                                                }
+                                            }
+                                            
+                                            if (actualValue && allowedValue) {
+                                                const diff = actualValue - allowedValue;
+                                                const percentage = ((diff / allowedValue) * 100).toFixed(1);
+                                                if (diff > 0) {
+                                                    return [
+                                                        '',
+                                                        `⚠️ ${Math.round(diff).toLocaleString()} km over limit`,
+                                                        `(${percentage}% above allowed)`
+                                                    ];
+                                                } else {
+                                                    return [
+                                                        '',
+                                                        `✓ ${Math.round(Math.abs(diff)).toLocaleString()} km under limit`,
+                                                        `(${Math.abs(percentage)}% below allowed)`
+                                                    ];
+                                                }
+                                            }
+                                            return '';
                                         }
-                                    }
-                                }
-                            },
-                            scales: {
-                                x: {
-                                    title: {
-                                        display: true,
-                                        text: 'Month of Lease',
-                                        font: {
-                                            size: 13,
-                                            weight: 'bold'
-                                        }
-                                    },
-                                    grid: {
-                                        display: true,
-                                        color: 'rgba(0, 0, 0, 0.05)'
-                                    }
-                                },
-                                y: {
-                                    title: {
-                                        display: true,
-                                        text: 'Total Kilometers',
-                                        font: {
-                                            size: 13,
-                                            weight: 'bold'
-                                        }
-                                    },
-                                    beginAtZero: true,
-                                    grid: {
-                                        display: true,
-                                        color: 'rgba(0, 0, 0, 0.1)'
-                                    }
-                                }
-                            }
-                        }
-                    });
-                }
-
-                return () => {
-                    if (chartInstance.current) {
-                        chartInstance.current.destroy();
-                    }
-                };
-            }, [mileageEntries, leaseParams]);
-
-            const addEntry = () => {
-                if (newEntry.mileage && newEntry.date) {
-                    const entry = {
-                        id: Date.now(),
-                        date: newEntry.date,
-                        mileage: parseFloat(newEntry.mileage)
-                    };
-                    const updatedEntries = [...mileageEntries, entry];
-                    setMileageEntries(updatedEntries);
-                    setNewEntry({ date: new Date().toISOString().split('T')[0], mileage: '' });
-                    
-                    if (githubToken) {
-                        setTimeout(() => {
-                            const data = {
-                                leaseParams,
-                                mileageEntries: updatedEntries,
-                                lastUpdated: new Date().toISOString()
-                            };
-                            saveDataToGitHub(data);
-                        }, 100);
-                    }
-                }
-            };
-
-            const deleteEntry = (id) => {
-                const updatedEntries = mileageEntries.filter(e => e.id !== id);
-                setMileageEntries(updatedEntries);
-                
-                if (githubToken) {
-                    setTimeout(() => {
-                        const data = {
-                            leaseParams,
-                            mileageEntries: updatedEntries,
-                            lastUpdated: new Date().toISOString()
-                        };
-                        saveDataToGitHub(data);
-                    }, 100);
-                }
-            };
-
-            const saveDataToGitHub = async (dataToSave) => {
-                try {
-                    let sha = null;
-                    try {
-                        const getResponse = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/contents/${DATA_FILE}`, {
-                            headers: {
-                                'Authorization': `token ${githubToken}`,
-                                'Accept': 'application/vnd.github.v3+json'
-                            }
-                        });
-                        if (getResponse.ok) {
-                            const fileData = await getResponse.json();
-                            sha = fileData.sha;
-                        }
-                    } catch(e) {
-                        console.log('File does not exist yet');
-                    }
-
-                    const content = btoa(unescape(encodeURIComponent(JSON.stringify(dataToSave, null, 2))));
-                    const payload = {
-                        message: 'Auto-save lease tracker data',
-                        content: content
-                    };
-                    
-                    if (sha) {
-                        payload.sha = sha;
-                    }
-
-                    await fetch(`https://api.github.com/repos/${GITHUB_REPO}/contents/${DATA_FILE}`, {
-                        method: 'PUT',
-                        headers: {
-                            'Authorization': `token ${githubToken}`,
-                            'Content-Type': 'application/json',
-                            'Accept': 'application/vnd.github.v3+json'
-                        },
-                        body: JSON.stringify(payload)
-                    });
-                } catch (error) {
-                    console.error('Auto-save error:', error);
-                }
-            };
-
-            return (
-                <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
-                    <div className="max-w-6xl mx-auto">
-                        <div className="bg-white rounded-2xl shadow-xl p-6 mb-6">
-                            <div className="flex items-center justify-between mb-6">
-                                <div className="flex items-center gap-3">
-                                    <div className="bg-indigo-600 p-3 rounded-xl">
-                                        <svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                                        </svg>
-                                    </div>
-                                    <div>
-                                        <h1 className="text-3xl font-bold text-gray-800">Lease Mileage Tracker</h1>
-                                        <p className="text-gray-600">Monitor and forecast your lease costs</p>
-                                    </div>
-                                </div>
-                                <div className="flex gap-2">
-                                    <button
-                                        onClick={() => setShowTripPlanner(!showTripPlanner)}
-                                        className="p-2 hover:bg-indigo-100 rounded-lg transition"
-                                        title="Trip Planner"
-                                    >
-                                        <svg className="w-6 h-6 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
-                                        </svg>
-                                    </button>
-                                    <button
-                                        onClick={() => setShowApiSettings(!showApiSettings)}
-                                        className="p-2 hover:bg-gray-100 rounded-lg transition"
-                                        title="GitHub Sync"
-                                    >
-                                        <svg className="w-6 h-6 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
-                                        </svg>
-                                    </button>
-                                    <button
-                                        onClick={() => setShowSettings(!showSettings)}
-                                        className="p-2 hover:bg-gray-100 rounded-lg transition"
-                                        title="Settings"
-                                    >
-                                        <svg className="w-6 h-6 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                                        </svg>
-                                    </button>
-                                </div>
-                            </div>
-
-                            {showTripPlanner && (
-                                <div className="bg-gradient-to-br from-indigo-50 to-purple-50 rounded-xl p-6 mb-6 border-2 border-indigo-200">
-                                    <div className="flex items-center justify-between mb-4">
-                                        <h3 className="text-xl font-bold text-gray-800 flex items-center gap-2">
-                                            <svg className="w-6 h-6 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
-                                            </svg>
-                                            Trip Planner
-                                        </h3>
-                                        <button
-                                            onClick={clearTrip}
-                                            className="text-sm text-indigo-600 hover:text-indigo-800 font-medium"
-                                        >
-                                            Clear All
-                                        </button>
-                                    </div>
-                                    
-                                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                                        <div>
-                                            <div className="bg-white rounded-lg p-4 mb-4">
-                                                <p className="text-sm text-gray-600 mb-3">
-                                                    <strong>Enter locations</strong> or <strong>click on the map</strong> to select From (🟢) and To (🔴) points
-                                                </p>
-                                                <div className="space-y-3">
-                                                    <div>
-                                                        <label className="block text-sm font-medium text-gray-700 mb-2">From Location</label>
-                                                        <input
-                                                            type="text"
-                                                            value={tripFrom}
-                                                            onChange={(e) => setTripFrom(e.target.value)}
-                                                            placeholder="e.g., Amsterdam, Hilversum"
-                                                            className="w-full p-3 border border-gray-300 rounded-lg"
-                                                        />
-                                                    </div>
-                                                    <div>
-                                                        <label className="block text-sm font-medium text-gray-700 mb-2">To Location</label>
-                                                        <input
-                                                            type="text"
-                                                            value={tripTo}
-                                                            onChange={(e) => setTripTo(e.target.value)}
-                                                            placeholder="e.g., Rotterdam, Utrecht"
-                                                            className="w-full p-3 border border-gray-300 rounded-lg"
-                                                        />
-                                                    </div>
-                                                    <button
-                                                        onClick={calculateTripImpact}
-                                                        disabled={tripCalculating || (!tripFrom && !tripTo && !fromCoords && !toCoords)}
-                                                        className="w-full bg-indigo-600 text-white px-4 py-3 rounded-lg hover:bg-indigo-700 transition font-medium disabled:bg-gray-400"
-                                                    >
-                                                        {tripCalculating ? 'Calculating...' : 'Calculate Trip Impact'}
-                                                    </button>
-                                                </div>
-                                            </div>
-
-                                            {tripError && (
-                                                <div className="bg-red-100 border border-red-300 text-red-800 p-3 rounded-lg text-sm mb-4">
-                                                    ⚠️ {tripError}
-                                                </div>
-                                            )}
-
-                                            {tripDistance && (
-                                                <div className="bg-white rounded-lg p-4 space-y-3">
-                                                    <h4 className="font-semibold text-gray-800 mb-3">Trip Analysis</h4>
-                                                    
-                                                    <div className="space-y-2 text-sm">
-                                                        <div className="flex justify-between">
-                                                            <span className="text-gray-600">One-way distance:</span>
-                                                            <span className="font-bold">{tripDistance.oneWay.toFixed(1)} km</span>
-                                                        </div>
-                                                        <div className="flex justify-between">
-                                                            <span className="text-gray-600">Round trip:</span>
-                                                            <span className="font-bold">{tripDistance.roundTrip.toFixed(1)} km</span>
-                                                        </div>
-                                                        <div className="border-t pt-2 mt-2">
-                                                            <div className="flex justify-between">
-                                                                <span className="text-gray-600">Current projected total:</span>
-                                                                <span className="font-medium">{Math.round(stats.projectedTotal).toLocaleString()} km</span>
-                                                            </div>
-                                                            <div className="flex justify-between text-indigo-600">
-                                                                <span className="font-medium">New projected total:</span>
-                                                                <span className="font-bold">{Math.round(tripDistance.newProjectedTotal).toLocaleString()} km</span>
-                                                            </div>
-                                                        </div>
-                                                        {tripDistance.additionalCost > 0 && (
-                                                            <div className="bg-red-50 p-3 rounded-lg mt-3">
-                                                                <div className="flex justify-between items-center">
-                                                                    <span className="text-red-700 font-medium">Additional overage cost:</span>
-                                                                    <span className="text-red-700 font-bold text-lg">€{tripDistance.additionalCost.toFixed(2)}</span>
-                                                                </div>
-                                                                <div className="text-xs text-red-600 mt-1">
-                                                                    This trip will add {Math.round(tripDistance.newOverage - stats.projectedOverage)} km over your limit
-                                                                </div>
-                                                            </div>
-                                                        )}
-                                                        {tripDistance.additionalCost === 0 && tripDistance.newProjectedTotal < leaseParams.totalAllowedKm && (
-                                                            <div className="bg-green-50 p-3 rounded-lg mt-3">
-                                                                <div className="text-green-700 font-medium text-center">
-                                                                    ✓ This trip keeps you within your allowance!
-                                                                </div>
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                            )}
-                                        </div>
-
-                                        <div>
-                                            <div 
-                                                ref={mapRef} 
-                                                className="w-full h-96 rounded-lg border-2 border-gray-300"
-                                                style={{ minHeight: '400px' }}
-                                            ></div>
-                                        </div>
-                                    </div>
-                                </div>
-                            )}
-
-                            {showApiSettings && (
-                                <div className="bg-blue-50 rounded-xl p-6 mb-6 border-2 border-blue-200">
-                                    <h3 className="text-lg font-semibold mb-4 text-gray-800">GitHub Sync</h3>
-                                    <div className="space-y-4">
-                                        <div>
-                                            <label className="block text-sm font-medium text-gray-700 mb-2">
-                                                GitHub Token
-                                            </label>
-                                            <input
-                                                type="password"
-                                                value={githubToken}
-                                                onChange={(e) => setGithubToken(e.target.value)}
-                                                placeholder="ghp_xxxxxxxxxxxx"
-                                                className="w-full p-3 border border-gray-300 rounded-lg"
-                                            />
-                                            <p className="text-xs text-gray-500 mt-1">
-                                                Stored locally. Used to sync with your repo.
-                                            </p>
-                                        </div>
-                                        <div className="flex gap-3">
-                                            <button
-                                                onClick={saveToGitHub}
-                                                disabled={isLoading || !githubToken}
-                                                className="flex-1 bg-green-600 text-white px-4 py-3 rounded-lg hover:bg-green-700 transition font-medium disabled:bg-gray-400"
-                                            >
-                                                💾 Save
-                                            </button>
-                                            <button
-                                                onClick={loadFromGitHub}
-                                                disabled={isLoading || !githubToken}
-                                                className="flex-1 bg-blue-600 text-white px-4 py-3 rounded-lg hover:bg-blue-700 transition font-medium disabled:bg-gray-400"
-                                            >
-                                                📥 Load
-                                            </button>
-                                        </div>
-                                        {syncStatus && (
-                                            <div className={`p-3 rounded-lg text-sm ${syncStatus.includes('✓') ? 'bg-green-100 text-green-800' : syncStatus.includes('✗') ? 'bg-red-100 text-red-800' : 'bg-yellow-100 text-yellow-800'}`}>
-                                                {syncStatus}
-                                            </div>
-                                        )}
-                                    </div>
-                                </div>
-                            )}
-
-                            {showSettings && (
-                                <div className="bg-gray-50 rounded-xl p-6 mb-6">
-                                    <h3 className="text-lg font-semibold mb-4 text-gray-800">Lease Parameters</h3>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        <div>
-                                            <label className="block text-sm font-medium text-gray-700 mb-2">Starting Mileage (km)</label>
-                                            <input
-                                                type="number"
-                                                value={leaseParams.startingMileage}
-                                                onChange={(e) => setLeaseParams({...leaseParams, startingMileage: parseFloat(e.target.value) || 0})}
-                                                className="w-full p-3 border border-gray-300 rounded-lg"
-                                            />
-                                        </div>
-                                        <div>
-                                            <label className="block text-sm font-medium text-gray-700 mb-2">Total Allowed KM</label>
-                                            <input
-                                                type="number"
-                                                value={leaseParams.totalAllowedKm}
-                                                onChange={(e) => setLeaseParams({...leaseParams, totalAllowedKm: parseFloat(e.target.value)})}
-                                                className="w-full p-3 border border-gray-300 rounded-lg"
-                                            />
-                                        </div>
-                                        <div>
-                                            <label className="block text-sm font-medium text-gray-700 mb-2">Cost per Extra KM (€)</label>
-                                            <input
-                                                type="number"
-                                                step="0.01"
-                                                value={leaseParams.costPerExtraKm}
-                                                onChange={(e) => setLeaseParams({...leaseParams, costPerExtraKm: parseFloat(e.target.value)})}
-                                                className="w-full p-3 border border-gray-300 rounded-lg"
-                                            />
-                                        </div>
-                                        <div>
-                                            <label className="block text-sm font-medium text-gray-700 mb-2">Lease Duration (Months)</label>
-                                            <input
-                                                type="number"
-                                                value={leaseParams.leaseDurationMonths}
-                                                onChange={(e) => setLeaseParams({...leaseParams, leaseDurationMonths: parseInt(e.target.value)})}
-                                                className="w-full p-3 border border-gray-300 rounded-lg"
-                                            />
-                                        </div>
-                                        <div>
-                                            <label className="block text-sm font-medium text-gray-700 mb-2">Lease Start Date</label>
-                                            <input
-                                                type="date"
-                                                value={leaseParams.leaseStartDate}
-                                                onChange={(e) => setLeaseParams({...leaseParams, leaseStartDate: e.target.value})}
-                                                className="w-full p-3 border border-gray-300 rounded-lg"
-                                            />
-                                        </div>
-                                    </div>
-                                </div>
-                            )}
-
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-                                <div className={`p-4 rounded-xl ${stats.status === 'over' ? 'bg-red-50' : stats.status === 'warning' ? 'bg-yellow-50' : 'bg-green-50'}`}>
-                                    <div className="text-sm font-medium text-gray-600 mb-2">Daily Average</div>
-                                    <div className="text-2xl font-bold text-gray-800">{stats.dailyAverage.toFixed(1)} km</div>
-                                    <div className="text-sm text-gray-600 mt-1">Target: {stats.allowedDailyAverage.toFixed(1)} km/day</div>
-                                </div>
-
-                                <div className="bg-indigo-50 p-4 rounded-xl">
-                                    <div className="text-sm font-medium text-gray-600 mb-2">Projected Total</div>
-                                    <div className="text-2xl font-bold text-gray-800">{Math.round(stats.projectedTotal).toLocaleString()} km</div>
-                                    <div className="text-sm text-gray-600 mt-1">Limit: {leaseParams.totalAllowedKm.toLocaleString()} km</div>
-                                </div>
-
-                                <div className={`p-4 rounded-xl ${stats.projectedCost > 0 ? 'bg-red-50' : 'bg-green-50'}`}>
-                                    <div className="text-sm font-medium text-gray-600 mb-2">Projected Cost</div>
-                                    <div className="text-2xl font-bold text-gray-800">€{stats.projectedCost.toFixed(2)}</div>
-                                    <div className="text-sm text-gray-600 mt-1">Overage: {Math.round(stats.projectedOverage)} km</div>
-                                </div>
-                            </div>
-
-                            {mileageEntries.length > 0 ? (
-                                <div className="bg-gray-50 rounded-xl p-6 mb-6">
-                                    <h3 className="text-lg font-semibold mb-4 text-gray-800">Month-by-Month Usage Analysis</h3>
-                                    <div style={{ height: '400px' }}>
-                                        <canvas ref={chartRef}></canvas>
-                                    </div>
-                                </div>
-                            ) : (
-                                <div className="bg-gray-50 rounded-xl p-6 mb-6 text-center">
-                                    <p className="text-gray-600">Add mileage entries to see your usage chart</p>
-                                </div>
-                            )}
-
-                            <div className="bg-gray-50 rounded-xl p-6">
-                                <h3 className="text-lg font-semibold mb-4 text-gray-800">Add Mileage Entry</h3>
-                                <div className="flex gap-4 mb-4 flex-wrap">
-                                    <div className="flex-1 min-w-[200px]">
-                                        <label className="block text-sm font-medium text-gray-700 mb-2">Date</label>
-                                        <input
-                                            type="date"
-                                            value={newEntry.date}
-                                            onChange={(e) => setNewEntry({...newEntry, date: e.target.value})}
-                                            className="w-full p-3 border border-gray-300 rounded-lg"
-                                        />
-                                    </div>
-                                    <div className="flex-1 min-w-[200px]">
-                                        <label className="block text-sm font-medium text-gray-700 mb-2">Mileage (km)</label>
-                                        <input
-                                            type="number"
-                                            value={newEntry.mileage}
-                                            onChange={(e) => setNewEntry({...newEntry, mileage: e.target.value})}
-                                            placeholder="Enter current mileage"
-                                            className="w-full p-3 border border-gray-300 rounded-lg"
-                                        />
-                                    </div>
-                                    <div className="flex items-end">
-                                        <button
-                                            onClick={addEntry}
-                                            className="bg-indigo-600 text-white px-6 py-3 rounded-lg hover:bg-indigo-700 transition font-medium whitespace-nowrap"
-                                        >
-                                            Add Entry
-                                        </button>
-                                    </div>
-                                </div>
-
-                                {mileageEntries.length > 0 && (
-                                    <div className="mt-4">
-                                        <h4 className="text-sm font-semibold text-gray-700 mb-3">Recent Entries</h4>
-                                        <div className="space-y-2 max-h-60 overflow-y-auto">
-                                            {[...mileageEntries].sort((a, b) => new Date(b.date) - new Date(a.date)).map(entry => (
-                                                <div key={entry.id} className="flex justify-between items-center bg-white p-3 rounded-lg">
-                                                    <div>
-                                                        <span className="font-medium text-gray-800">{entry.mileage.toLocaleString()} km</span>
-                                                        <span className="text-gray-500 text-sm ml-3">{new Date(entry.date).toLocaleDateString()}</span>
-                                                    </div>
-                                                    <button
-                                                        onClick={() => deleteEntry(entry.id)}
-                                                        className="text-red-600 hover:text-red-800 text-sm font-medium"
-                                                    >
-                                                        Delete
-                                                    </button>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            );
-        }
-
-        const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(React.createElement(LeaseMileageTracker));
-    </script>
-</body>
-</html>
